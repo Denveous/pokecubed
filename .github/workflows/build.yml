@@ -49,12 +49,12 @@ jobs:
     - name: Upload to Release
       if: github.event_name == 'release'
       run: |
-        # Upload the main jar from build/libs
-        gh release upload ${{ github.event.release.tag_name }} build/libs/PokeCubedInstaller-*.jar
-        
-        # Upload the renamed jar from bin if it exists
+        # Upload only the generic filename jar from bin
         if [ -f bin/PokeCubedInstaller.jar ]; then
           gh release upload ${{ github.event.release.tag_name }} bin/PokeCubedInstaller.jar
+        else
+          echo "ERROR: bin/PokeCubedInstaller.jar not found!"
+          exit 1
         fi
       env:
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
