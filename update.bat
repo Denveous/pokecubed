@@ -5,6 +5,9 @@ if "%message%"=="" (
     set message=Auto-update
 )
 
+echo Fixing git ownership...
+git config --global --add safe.directory %CD%
+
 echo Adding files...
 git add .
 

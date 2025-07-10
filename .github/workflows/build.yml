@@ -41,7 +41,7 @@ jobs:
       with:
         name: PokeCubed-Installer
         path: |
-          build/libs/PokeCubed-*.jar
+          build/libs/PokeCubedInstaller-*.jar
           bin/PokeCubedInstaller.jar
         if-no-files-found: warn
         retention-days: 30
@@ -50,7 +50,7 @@ jobs:
       if: github.event_name == 'release'
       run: |
         # Upload the main jar from build/libs
-        gh release upload ${{ github.event.release.tag_name }} build/libs/PokeCubed-*.jar
+        gh release upload ${{ github.event.release.tag_name }} build/libs/PokeCubedInstaller-*.jar
         
         # Upload the renamed jar from bin if it exists
         if [ -f bin/PokeCubedInstaller.jar ]; then

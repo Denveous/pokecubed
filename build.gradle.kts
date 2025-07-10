@@ -50,13 +50,13 @@ application {
 
 tasks.named<com.github.jengelman.gradle.plugins.shadow.tasks.ShadowJar>("shadowJar") {
     archiveClassifier.set("")
-    archiveFileName.set("PokeCubed-${version}.jar")
+    archiveFileName.set("PokeCubedInstaller-${version}.jar")
 }
 
 tasks.register<Copy>("copyJarToBin") {
     from(tasks.shadowJar)
     into("bin")
-    rename { "pokecubedinstaller.jar" }
+    rename { "PokeCubedInstaller.jar" }
     dependsOn(tasks.shadowJar)
 }
 
