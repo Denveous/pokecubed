@@ -11,14 +11,32 @@ import java.nio.file.Files
 import java.nio.file.Path
 import java.nio.file.Paths
 import java.nio.file.StandardCopyOption
+import java.nio.file.StandardOpenOption
+import java.time.LocalDateTime
+import java.time.format.DateTimeFormatter
 import javax.swing.*
 import javax.swing.border.EmptyBorder
 import kotlin.system.exitProcess
 
-const val INSTALLER_VERSION = "1.0.1"
+const val INSTALLER_VERSION = "1.0.0" // testing
 const val CONFIG_URL = "https://moreno.land/dl/mpack/moddata.json"
 const val FULL_CONFIG_URL = "https://moreno.land/dl/mpack/pokecubedinstaller.json"
 const val FILE_INFO_URL = "https://moreno.land/dl/mpack/file_info.php"
+
+private val logFile = Paths.get("PokeCubedInstaller.log")
+private val timeFormatter = DateTimeFormatter.ofPattern("M/d/yyyy h:mm:ss a")
+
+fun logMessage(message: String) {
+    val timestamp = LocalDateTime.now().format(timeFormatter)
+    val logEntry = "[$timestamp]: $message\n"
+    try {
+        Files.write(logFile, logEntry.toByteArray(), StandardOpenOption.CREATE, StandardOpenOption.APPEND)
+        println(message)
+    } catch (e: Exception) {
+        println("Failed to write to log: ${e.message}")
+        println(message)
+    }
+}
 
 @Serializable
 data class ModpackConfig(
@@ -139,7 +157,7 @@ data class ServerFile(
     val modified_iso: String
 )
 
-class ModpackInstaller(private val consoleMode: Boolean = false) : JFrame("PokéCubed Redux Modpack Installer (AutoTaper)") {
+class ModpackInstaller(private val consoleMode: Boolean = false) : JFrame("PokéCubed Redux Modpack Installer") {
     private val json = Json { ignoreUnknownKeys = true }
     private var config: ModpackConfig? = null
     private var fullConfig: FullConfig? = null
@@ -156,9 +174,10 @@ class ModpackInstaller(private val consoleMode: Boolean = false) : JFrame("Poké
     private val downloadLabel = JLabel("0/0 files")
     private val installButton = JButton("Install Modpack")
     private val removeButton = JButton("Remove Modpack")
-    private val goBedCheckbox = JCheckBox("Go to bed", false)
+
     
     init {
+        logMessage("PokéCubed Redux Modpack Installer v$INSTALLER_VERSION started")
         setupUI()
         updateInstallPath() 
         loadConfigAsync()
@@ -210,11 +229,6 @@ class ModpackInstaller(private val consoleMode: Boolean = false) : JFrame("Poké
         }, gbc)
         
         gbc.gridx = 0; gbc.gridy = 2; gbc.gridwidth = 3; gbc.fill = GridBagConstraints.HORIZONTAL; gbc.weightx = 1.0
-        mainPanel.add(goBedCheckbox.apply {
-            toolTipText = "You should probably go to bed."
-        }, gbc)
-        
-        gbc.gridy = 3
         mainPanel.add(statusLabel.apply {
             font = Font(Font.SANS_SERIF, Font.BOLD, 12)
             foreground = Color(0x1976D2)
@@ -250,6 +264,19 @@ class ModpackInstaller(private val consoleMode: Boolean = false) : JFrame("Poké
         }, gbc)
         
         add(mainPanel, BorderLayout.CENTER)
+        
+        val versionLabel = JLabel("v$INSTALLER_VERSION").apply {
+            font = Font(Font.SANS_SERIF, Font.PLAIN, 11)
+            foreground = Color(0x666666)
+            size = preferredSize
+        }
+        
+        mainPanel.add(versionLabel)
+        mainPanel.addComponentListener(object : java.awt.event.ComponentAdapter() {
+            override fun componentResized(e: java.awt.event.ComponentEvent?) {
+                versionLabel.setBounds(10, mainPanel.height - 25, versionLabel.preferredSize.width, versionLabel.preferredSize.height)
+            }
+        })
         
         if (consoleMode) {
             val consoleArea = JTextArea(10, 50).apply {
@@ -298,9 +325,20 @@ class ModpackInstaller(private val consoleMode: Boolean = false) : JFrame("Poké
                          Files.exists(targetDir.resolve("config"))
         
         if (isInstalled) {
-            installButton.text = "Update Modpack"
-            installButton.background = Color(0xFF9800)
-            statusLabel.text = "Modpack installed - ready to update"
+            CoroutineScope(Dispatchers.IO).launch {
+                val hasUpdates = checkForUpdates(targetDir)
+                SwingUtilities.invokeLater {
+                    if (hasUpdates) {
+                        installButton.text = "Update Modpack"
+                        installButton.background = Color(0xFF9800)
+                        statusLabel.text = "Updates available"
+                    } else {
+                        installButton.text = "Check for Updates"
+                        installButton.background = Color(0x2196F3)
+                        statusLabel.text = "Modpack up to date"
+                    }
+                }
+            }
         } else {
             installButton.text = "Install Modpack"
             installButton.background = Color(0x4CAF50)
@@ -364,21 +402,24 @@ class ModpackInstaller(private val consoleMode: Boolean = false) : JFrame("Poké
                 if (Files.exists(targetDir)) {
                     targetDir.toFile().deleteRecursively()
                     statusLabel.text = "Modpack removed successfully"
+                    logMessage("Modpack removed successfully")
                     checkIfInstalled()
                 } else {
                     statusLabel.text = "No modpack found to remove"
+                    logMessage("No modpack found to remove")
                 }
             } catch (e: Exception) {
                 statusLabel.text = "Failed to remove modpack"
+                logMessage("Failed to remove modpack: ${e.message}")
                 JOptionPane.showMessageDialog(this, "Failed to remove modpack: ${e.message}", "Error", JOptionPane.ERROR_MESSAGE)
             }
         }
     }
     
     private fun loadConfigAsync() {
-        GlobalScope.launch(Dispatchers.IO) {
+        CoroutineScope(Dispatchers.IO).launch {
             try {
-                val configText = URL(CONFIG_URL).readText()
+                val configText = java.net.URI(CONFIG_URL).toURL().readText()
                 config = json.decodeFromString<ModpackConfig>(configText)
                 
                 SwingUtilities.invokeLater {
@@ -388,7 +429,13 @@ class ModpackInstaller(private val consoleMode: Boolean = false) : JFrame("Poké
                     val currentVersion = INSTALLER_VERSION
                     val latestVersion = config?.installer?.version
                     
+                    logMessage("Loaded modpack config v$modpackVersion")
+                    logMessage("Installer version: $currentVersion, Latest: $latestVersion")
+                    
+                    checkIfInstalled()
+                    
                     if (latestVersion != currentVersion && config?.installer?.force_update == true) {
+                        logMessage("Installer update available: $latestVersion")
                         showInstallerUpdateDialog(latestVersion, config?.installer?.download_url)
                     }
                 }
@@ -396,9 +443,82 @@ class ModpackInstaller(private val consoleMode: Boolean = false) : JFrame("Poké
                 SwingUtilities.invokeLater {
                     statusLabel.text = "Failed to load configuration"
                     installButton.isEnabled = false
-                    println("Failed to load config: ${e.message}")
+                    logMessage("Failed to load config: ${e.message}")
                 }
             }
+        }
+    }
+    
+    private fun checkForUpdates(targetDir: Path): Boolean {
+        try {
+            if (fullConfig == null) {
+                val fullConfigText = java.net.URI(FULL_CONFIG_URL).toURL().readText()
+                fullConfig = json.decodeFromString<FullConfig>(fullConfigText)
+            }
+            
+            if (serverFileInfo == null) {
+                try {
+                    val fileInfoText = java.net.URI(FILE_INFO_URL).toURL().readText()
+                    serverFileInfo = json.decodeFromString<ServerFileInfo>(fileInfoText)
+                } catch (e: Exception) {
+                    println("Failed to load server file info for update check: ${e.message}")
+                    return true
+                }
+            }
+            
+            fullConfig?.modrinth_mods?.forEach { mod ->
+                val targetPath = targetDir.resolve("mods").resolve(mod.filename)
+                if (shouldDownloadFile(targetPath)) return true
+            }
+            
+            fullConfig?.custom_mods?.forEach { mod ->
+                val targetPath = if (mod.target_path.isNotEmpty()) {
+                    targetDir.resolve("mods").resolve(mod.target_path).resolve(mod.filename)
+                } else {
+                    targetDir.resolve("mods").resolve(mod.filename)
+                }
+                val serverFile = findServerFile("mods/${mod.filename}".replace("\\", "/"))
+                if (shouldDownloadFile(targetPath, serverFile?.modified ?: 0)) return true
+            }
+            
+            listOf(
+                fullConfig?.config_files to "config",
+                fullConfig?.resource_packs to "resourcepacks", 
+                fullConfig?.shader_packs to "shaderpacks",
+                fullConfig?.fabric_files to ".fabric",
+                fullConfig?.data_files to "data",
+                fullConfig?.native_files to "natives"
+            ).forEach { (files, dirName) ->
+                files?.forEach { file ->
+                    val targetPath = if (file.target_path.isNotEmpty()) {
+                        targetDir.resolve(dirName).resolve(file.target_path.replace("\\", "/")).resolve(file.filename)
+                    } else {
+                        targetDir.resolve(dirName).resolve(file.filename)
+                    }
+                    
+                    val serverPath = if (file.target_path.isNotEmpty()) {
+                        "$dirName/${file.target_path}/${file.filename}".replace("\\", "/")
+                    } else {
+                        "$dirName/${file.filename}"
+                    }
+                    
+                    val serverFile = findServerFile(serverPath)
+                    if (shouldDownloadFile(targetPath, serverFile?.modified ?: 0)) return true
+                }
+            }
+            
+            fullConfig?.core_files?.forEach { file ->
+                if (file.required_for.contains(selectedProfile) || file.required_for.contains("both")) {
+                    val targetPath = targetDir.resolve(file.filename)
+                    val serverFile = findServerFile(file.filename)
+                    if (shouldDownloadFile(targetPath, serverFile?.modified ?: 0)) return true
+                }
+            }
+            
+            return false
+        } catch (e: Exception) {
+            println("Error checking for updates: ${e.message}")
+            return true
         }
     }
     
@@ -466,7 +586,6 @@ class ModpackInstaller(private val consoleMode: Boolean = false) : JFrame("Poké
         val found = serverFileInfo?.files?.find { it.path == path }
         if (found == null) {
             logToConsole("Server file not found for path: $path")
-            // Show what paths ARE available
             logToConsole("Available server paths: ${serverFileInfo?.files?.take(5)?.map { it.path }}")
         }
         return found
@@ -497,11 +616,43 @@ class ModpackInstaller(private val consoleMode: Boolean = false) : JFrame("Poké
     private fun startInstallation() {
         if (isInstalling) return
         
+        if (installButton.text == "Check for Updates") {
+            statusLabel.text = "Checking for updates..."
+            logMessage("Checking for updates...")
+            
+            CoroutineScope(Dispatchers.IO).launch {
+                val targetDir = if (selectedProfile == "tlauncher") {
+                    minecraftDir.resolve("versions").resolve("PokeCubed")
+                } else {
+                    minecraftDir
+                }
+                
+                val hasUpdates = checkForUpdates(targetDir)
+                
+                SwingUtilities.invokeLater {
+                    if (hasUpdates) {
+                        installButton.text = "Update Modpack"
+                        installButton.background = Color(0xFF9800)
+                        statusLabel.text = "Updates available"
+                        logMessage("Updates found - ready to install")
+                    } else {
+                        statusLabel.text = "No updates found"
+                        logMessage("No updates found - modpack is up to date")
+                    }
+                }
+            }
+            return
+        }
+        
+        val isUpdate = installButton.text == "Update Modpack"
+        
         isInstalling = true
         installButton.isEnabled = false
         removeButton.isEnabled = false
         
-        GlobalScope.launch(Dispatchers.IO) {
+        logMessage("Starting ${if (isUpdate) "update" else "installation"}...")
+        
+        CoroutineScope(Dispatchers.IO).launch {
             val success = installModpack()
             
             SwingUtilities.invokeLater {
@@ -510,18 +661,21 @@ class ModpackInstaller(private val consoleMode: Boolean = false) : JFrame("Poké
                 removeButton.isEnabled = true
                 
                 if (success) {
-                    statusLabel.text = "Installation completed successfully!"
                     progressBar.value = 100
                     progressBar.string = "100%"
+                    
+                    if (isUpdate) {
+                        statusLabel.text = "Modpack updated successfully!"
+                        logMessage("Modpack updated successfully")
+                    } else {
+                        statusLabel.text = "Modpack installed successfully!"
+                        logMessage("Modpack installed successfully")
+                    }
+                    
                     checkIfInstalled()
-                    JOptionPane.showMessageDialog(this@ModpackInstaller,
-                        "Modpack installed successfully!\n\nYou can now launch Minecraft and select the PokéCubed profile.",
-                        "Success", JOptionPane.INFORMATION_MESSAGE)
                 } else {
-                    statusLabel.text = "Installation failed"
-                    JOptionPane.showMessageDialog(this@ModpackInstaller,
-                        "Installation failed. Check the console for details.",
-                        "Error", JOptionPane.ERROR_MESSAGE)
+                    statusLabel.text = "${if (isUpdate) "Update" else "Installation"} failed"
+                    logMessage("${if (isUpdate) "Update" else "Installation"} failed")
                 }
             }
         }
@@ -531,12 +685,12 @@ class ModpackInstaller(private val consoleMode: Boolean = false) : JFrame("Poké
         return try {
             updateStatus("Loading modpack configuration...")
             
-            val fullConfigText = URL(FULL_CONFIG_URL).readText()
+            val fullConfigText = java.net.URI(FULL_CONFIG_URL).toURL().readText()
             fullConfig = json.decodeFromString<FullConfig>(fullConfigText)
             
             updateStatus("Checking file timestamps...")
             try {
-                val fileInfoText = URL(FILE_INFO_URL).readText()
+                val fileInfoText = java.net.URI(FILE_INFO_URL).toURL().readText()
                 serverFileInfo = json.decodeFromString<ServerFileInfo>(fileInfoText)
                 println("Loaded file info for ${serverFileInfo?.files?.size ?: 0} server files")
             } catch (e: Exception) {
@@ -705,27 +859,77 @@ class ModpackInstaller(private val consoleMode: Boolean = false) : JFrame("Poké
     }
     
     private fun downloadFile(url: String, targetPath: Path) {
+        val maxRetries = 3
         try {
             Files.createDirectories(targetPath.parent)
             
             var retryCount = 0
-            val maxRetries = 30
             
             while (retryCount < maxRetries) {
                 try {
                     if (retryCount > 0) {
-                        Thread.sleep(1000L * retryCount)
+                        println("Retry attempt $retryCount for $url")
+                        Thread.sleep(2000L * retryCount)
                     }
                     
-                    URL(url).openStream().use { input ->
-                        Files.copy(input, targetPath, StandardCopyOption.REPLACE_EXISTING)
+                    val connection = java.net.URI(url).toURL().openConnection()
+                    connection.connectTimeout = 30000
+                    connection.readTimeout = 60000
+                    connection.setRequestProperty("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36")
+                    connection.setRequestProperty("Accept", "*/*")
+                    connection.setRequestProperty("Accept-Language", "en-US,en;q=0.9")
+                    connection.setRequestProperty("Connection", "keep-alive")
+                    
+                    val contentLength = connection.contentLength
+                    println("Expected file size: $contentLength bytes for ${targetPath.fileName}")
+                    
+                    connection.getInputStream().use { input ->
+                        Files.newOutputStream(targetPath, StandardOpenOption.CREATE, StandardOpenOption.TRUNCATE_EXISTING).use { output ->
+                            val buffer = ByteArray(8192)
+                            var totalBytes = 0L
+                            var bytesRead: Int
+                            while (input.read(buffer).also { bytesRead = it } != -1) {
+                                output.write(buffer, 0, bytesRead)
+                                totalBytes += bytesRead
+                            }
+                            output.flush()
+                            println("Actually downloaded: $totalBytes bytes")
+                        }
                     }
+                    
+                    val downloadedSize = Files.size(targetPath)
+                    println("Downloaded ${targetPath.fileName}: $downloadedSize bytes")
+                    
+                    if (contentLength > 0 && downloadedSize != contentLength.toLong()) {
+                        println("WARNING: Downloaded size ($downloadedSize) doesn't match expected size ($contentLength)")
+                        if (retryCount < maxRetries - 1) {
+                            println("Retrying download...")
+                            retryCount++
+                            continue
+                        }
+                    }
+                    
+                    val isUpdater = targetPath.fileName.toString().contains("Updater")
+                    if (downloadedSize < 100 || (!isUpdater && downloadedSize < 10000)) {
+                        println("WARNING: Downloaded file seems too small, might be an error response")
+                        if (Files.exists(targetPath)) {
+                            val content = Files.readString(targetPath).take(200)
+                            println("File content preview: $content")
+                        }
+                        if (retryCount < maxRetries - 1) {
+                            println("Retrying download...")
+                            retryCount++
+                            continue
+                        }
+                    }
+                    
                     return
                     
                 } catch (e: java.io.IOException) {
-                    if (e.message?.contains("429") == true && retryCount < maxRetries - 1) {
-                        println("Rate limited, retrying in ${1000 * (retryCount + 1)}ms...")
+                    println("Download failed: ${e.message}")
+                    if (retryCount < maxRetries - 1) {
                         retryCount++
+                        continue
                     } else {
                         throw e
                     }
@@ -733,7 +937,7 @@ class ModpackInstaller(private val consoleMode: Boolean = false) : JFrame("Poké
             }
             
         } catch (e: Exception) {
-            println("Failed to download $url: ${e.message}")
+            println("Failed to download $url after $maxRetries attempts: ${e.message}")
             throw e
         }
     }
@@ -773,10 +977,10 @@ class ModpackInstaller(private val consoleMode: Boolean = false) : JFrame("Poké
             return
         }
         
-        GlobalScope.launch(Dispatchers.IO) {
+        CoroutineScope(Dispatchers.IO).launch {
             try {
                 SwingUtilities.invokeLater {
-                    statusLabel.text = "Downloading installer update..."
+                    statusLabel.text = "Preparing update..."
                     progressBar.isIndeterminate = true
                     installButton.isEnabled = false
                     removeButton.isEnabled = false
@@ -791,23 +995,44 @@ class ModpackInstaller(private val consoleMode: Boolean = false) : JFrame("Poké
                     return@launch
                 }
                 
-                val tempFile = Files.createTempFile("installer_update", ".jar")
-                downloadFile(downloadUrl, tempFile)
-                
-                val updateScript = createUpdateScript(tempFile, currentJarPath)
+                val updaterPath = currentJarPath.parent.resolve("PokeCubedUpdater.jar")
+                val updaterUrl = "https://moreno.land/dl/mpack/jar/PokeCubedUpdater.jar"
                 
                 SwingUtilities.invokeLater {
-                    JOptionPane.showMessageDialog(this@ModpackInstaller,
-                        "Update downloaded successfully!\nThe installer will now restart to apply the update.",
-                        "Update Ready", JOptionPane.INFORMATION_MESSAGE)
+                    statusLabel.text = "Downloading updater..."
+                }
+                println("Downloading updater from: $updaterUrl")
+                downloadFile(updaterUrl, updaterPath)
+                println("Updater downloaded to: $updaterPath")
+                
+                SwingUtilities.invokeLater {
+                    statusLabel.text = "Downloading new installer..."
+                }
+                
+                val newInstallerPath = currentJarPath.parent.resolve("PokeCubedInstaller-new.jar")
+                println("Downloading new installer from: $downloadUrl")
+                downloadFile(downloadUrl, newInstallerPath)
+                println("New installer downloaded to: $newInstallerPath")
+                
+                SwingUtilities.invokeLater {
+                    val result = JOptionPane.showConfirmDialog(this@ModpackInstaller,
+                        "Update files downloaded successfully.\nRestart to complete the update?",
+                        "Update Ready", JOptionPane.YES_NO_OPTION, JOptionPane.QUESTION_MESSAGE)
                     
-                    try {
-                        ProcessBuilder().command(updateScript).start()
-                        exitProcess(0)
-                    } catch (e: Exception) {
-                        JOptionPane.showMessageDialog(this@ModpackInstaller,
-                            "Failed to start update process: ${e.message}",
-                            "Update Error", JOptionPane.ERROR_MESSAGE)
+                    if (result == JOptionPane.YES_OPTION) {
+                        try {
+                            val latestVersion = config?.installer?.version ?: "unknown"
+                            println("Starting updater with args: ${newInstallerPath.toString()} $currentJarPath $latestVersion")
+                            ProcessBuilder("java", "-jar", updaterPath.toString(), newInstallerPath.toString(), currentJarPath.toString(), latestVersion).start()
+                            println("Updater started, exiting installer...")
+                            exitProcess(0)
+                        } catch (e: Exception) {
+                            JOptionPane.showMessageDialog(this@ModpackInstaller,
+                                "Failed to start updater: ${e.message}",
+                                "Update Error", JOptionPane.ERROR_MESSAGE)
+                            resetUIAfterUpdate()
+                        }
+                    } else {
                         resetUIAfterUpdate()
                     }
                 }
@@ -815,7 +1040,7 @@ class ModpackInstaller(private val consoleMode: Boolean = false) : JFrame("Poké
             } catch (e: Exception) {
                 SwingUtilities.invokeLater {
                     JOptionPane.showMessageDialog(this@ModpackInstaller,
-                        "Failed to download update: ${e.message}",
+                        "Failed to download update files: ${e.message}",
                         "Update Error", JOptionPane.ERROR_MESSAGE)
                     resetUIAfterUpdate()
                 }
@@ -832,41 +1057,6 @@ class ModpackInstaller(private val consoleMode: Boolean = false) : JFrame("Poké
         }
     }
     
-    private fun createUpdateScript(tempFile: Path, currentJarPath: Path): List<String> {
-        val isWindows = System.getProperty("os.name").lowercase().contains("win")
-        
-        return if (isWindows) {
-            val scriptPath = Files.createTempFile("update", ".bat")
-            val scriptContent = """
-                @echo off
-                timeout /t 2 /nobreak >nul
-                copy /y "${tempFile.toAbsolutePath()}" "${currentJarPath.toAbsolutePath()}"
-                del "${tempFile.toAbsolutePath()}"
-                start "" java -jar "${currentJarPath.toAbsolutePath()}"
-                del "%~f0"
-            """.trimIndent()
-            Files.write(scriptPath, scriptContent.toByteArray())
-            listOf("cmd", "/c", scriptPath.toString())
-        } else {
-            val scriptPath = Files.createTempFile("update", ".sh")
-            val scriptContent = """
-                #!/bin/bash
-                sleep 2
-                cp "${tempFile.toAbsolutePath()}" "${currentJarPath.toAbsolutePath()}"
-                rm "${tempFile.toAbsolutePath()}"
-                java -jar "${currentJarPath.toAbsolutePath()}" &
-                rm "$0"
-            """.trimIndent()
-            Files.write(scriptPath, scriptContent.toByteArray())
-            Files.setPosixFilePermissions(scriptPath, setOf(
-                java.nio.file.attribute.PosixFilePermission.OWNER_READ,
-                java.nio.file.attribute.PosixFilePermission.OWNER_WRITE,
-                java.nio.file.attribute.PosixFilePermission.OWNER_EXECUTE
-            ))
-            listOf("bash", scriptPath.toString())
-        }
-    }
-    
     private fun resetUIAfterUpdate() {
         progressBar.isIndeterminate = false
         progressBar.value = 0
@@ -879,9 +1069,22 @@ class ModpackInstaller(private val consoleMode: Boolean = false) : JFrame("Poké
 fun main(args: Array<String>) {
     val consoleMode = args.contains("--console")
     
+    try {
+        val currentJarPath = ModpackInstaller::class.java.protectionDomain.codeSource.location.toURI()
+        val currentDir = Paths.get(currentJarPath).parent
+        val updaterPath = currentDir.resolve("PokeCubedUpdater.jar")
+        
+        if (Files.exists(updaterPath)) {
+            Thread.sleep(1000)
+            Files.deleteIfExists(updaterPath)
+            logMessage("Cleaned up updater file")
+        }
+    } catch (e: Exception) {
+        logMessage("Failed to cleanup updater: ${e.message}")
+    }
+    
     if (consoleMode) {
-        println("PokéCubed Redux Modpack Installer v$INSTALLER_VERSION")
-        println("Console mode ${if (args.contains("--console")) "enabled via --console flag" else "detected"} - GUI and console output enabled")
+        logMessage("Console mode enabled")
     }
     
     SwingUtilities.invokeLater {

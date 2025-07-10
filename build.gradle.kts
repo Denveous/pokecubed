@@ -13,6 +13,8 @@ val versionMatch = versionRegex.find(mainKtFile.readText())
 val appVersion = versionMatch?.groupValues?.get(1) ?: "1.0"
 version = appVersion
 
+println("Detected version: $appVersion")
+
 repositories {
     mavenCentral()
 }
@@ -29,9 +31,7 @@ tasks.test {
     useJUnitPlatform()
 }
 
-kotlin {
-    jvmToolchain(21)
-}
+
 
 sourceSets {
     main {
@@ -42,6 +42,11 @@ sourceSets {
             srcDirs("src/resources")
         }
     }
+    create("updater") {
+        java {
+            srcDirs("updater/src/main/java")
+        }
+    }
 }
 
 application {
@@ -50,13 +55,12 @@ application {
 
 tasks.named<com.github.jengelman.gradle.plugins.shadow.tasks.ShadowJar>("shadowJar") {
     archiveClassifier.set("")
-    archiveFileName.set("PokeCubedInstaller-${version}.jar")
+    archiveFileName.set("PokeCubedInstaller-${appVersion}.jar")
 }
 
 tasks.register<Copy>("copyJarToBin") {
     from(tasks.shadowJar)
     into("bin")
-    rename { "PokeCubedInstaller.jar" }
     dependsOn(tasks.shadowJar)
 }
 
@@ -64,6 +68,30 @@ tasks.shadowJar {
     finalizedBy("copyJarToBin")
 }
 
+val compileUpdater = tasks.register<JavaCompile>("compileUpdater") {
+    source = fileTree("updater/src/main/java")
+    classpath = files()
+    destinationDirectory.set(layout.buildDirectory.dir("updater-classes"))
+    options.release.set(11)
+}
+
+tasks.register<Jar>("updaterJar") {
+    archiveBaseName.set("PokeCubedUpdater")
+    archiveVersion.set("")
+    archiveClassifier.set("")
+    from(compileUpdater.get().destinationDirectory)
+    manifest {
+        attributes("Main-Class" to "Updater")
+    }
+    dependsOn(compileUpdater)
+}
+
+tasks.register<Copy>("copyUpdaterToBin") {
+    from(tasks.named("updaterJar"))
+    into("bin")
+    dependsOn("updaterJar")
+}
+
 tasks.build {
-    finalizedBy("copyJarToBin")
+    finalizedBy("copyJarToBin", "copyUpdaterToBin")
 }
