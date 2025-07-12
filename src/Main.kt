@@ -18,7 +18,7 @@ import javax.swing.*
 import javax.swing.border.EmptyBorder
 import kotlin.system.exitProcess
 
-const val INSTALLER_VERSION = "1.0.0" // testing
+const val INSTALLER_VERSION = "1.0.2" // testing
 const val CONFIG_URL = "https://moreno.land/dl/mpack/moddata.json"
 const val FULL_CONFIG_URL = "https://moreno.land/dl/mpack/pokecubedinstaller.json"
 const val FILE_INFO_URL = "https://moreno.land/dl/mpack/file_info.php"
@@ -419,7 +419,7 @@ class ModpackInstaller(private val consoleMode: Boolean = false) : JFrame("Poké
     private fun loadConfigAsync() {
         CoroutineScope(Dispatchers.IO).launch {
             try {
-                val configText = java.net.URI(CONFIG_URL).toURL().readText()
+                val configText = java.net.URI(CONFIG_URL.replace(" ", "%20")).toURL().readText()
                 config = json.decodeFromString<ModpackConfig>(configText)
                 
                 SwingUtilities.invokeLater {
@@ -452,13 +452,13 @@ class ModpackInstaller(private val consoleMode: Boolean = false) : JFrame("Poké
     private fun checkForUpdates(targetDir: Path): Boolean {
         try {
             if (fullConfig == null) {
-                val fullConfigText = java.net.URI(FULL_CONFIG_URL).toURL().readText()
+                val fullConfigText = java.net.URI(FULL_CONFIG_URL.replace(" ", "%20")).toURL().readText()
                 fullConfig = json.decodeFromString<FullConfig>(fullConfigText)
             }
             
             if (serverFileInfo == null) {
                 try {
-                    val fileInfoText = java.net.URI(FILE_INFO_URL).toURL().readText()
+                    val fileInfoText = java.net.URI(FILE_INFO_URL.replace(" ", "%20")).toURL().readText()
                     serverFileInfo = json.decodeFromString<ServerFileInfo>(fileInfoText)
                 } catch (e: Exception) {
                     println("Failed to load server file info for update check: ${e.message}")
@@ -685,12 +685,12 @@ class ModpackInstaller(private val consoleMode: Boolean = false) : JFrame("Poké
         return try {
             updateStatus("Loading modpack configuration...")
             
-            val fullConfigText = java.net.URI(FULL_CONFIG_URL).toURL().readText()
+            val fullConfigText = java.net.URI(FULL_CONFIG_URL.replace(" ", "%20")).toURL().readText()
             fullConfig = json.decodeFromString<FullConfig>(fullConfigText)
             
             updateStatus("Checking file timestamps...")
             try {
-                val fileInfoText = java.net.URI(FILE_INFO_URL).toURL().readText()
+                val fileInfoText = java.net.URI(FILE_INFO_URL.replace(" ", "%20")).toURL().readText()
                 serverFileInfo = json.decodeFromString<ServerFileInfo>(fileInfoText)
                 println("Loaded file info for ${serverFileInfo?.files?.size ?: 0} server files")
             } catch (e: Exception) {
@@ -872,7 +872,8 @@ class ModpackInstaller(private val consoleMode: Boolean = false) : JFrame("Poké
                         Thread.sleep(2000L * retryCount)
                     }
                     
-                    val connection = java.net.URI(url).toURL().openConnection()
+                    val encodedUrl = url.replace(" ", "%20").replace("\\", "/")
+                    val connection = java.net.URI(encodedUrl).toURL().openConnection()
                     connection.connectTimeout = 30000
                     connection.readTimeout = 60000
                     connection.setRequestProperty("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36")
@@ -909,19 +910,7 @@ class ModpackInstaller(private val consoleMode: Boolean = false) : JFrame("Poké
                         }
                     }
                     
-                    val isUpdater = targetPath.fileName.toString().contains("Updater")
-                    if (downloadedSize < 100 || (!isUpdater && downloadedSize < 10000)) {
-                        println("WARNING: Downloaded file seems too small, might be an error response")
-                        if (Files.exists(targetPath)) {
-                            val content = Files.readString(targetPath).take(200)
-                            println("File content preview: $content")
-                        }
-                        if (retryCount < maxRetries - 1) {
-                            println("Retrying download...")
-                            retryCount++
-                            continue
-                        }
-                    }
+
                     
                     return
                     
