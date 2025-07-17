@@ -92,6 +92,13 @@ tasks.register<Copy>("copyUpdaterToBin") {
     dependsOn("updaterJar")
 }
 
+tasks.register<Copy>("copyGenericJarToBin") {
+    from(tasks.shadowJar)
+    into("bin")
+    rename { "PokeCubedInstaller.jar" }
+    dependsOn(tasks.shadowJar)
+}
+
 tasks.build {
     finalizedBy("copyJarToBin", "copyUpdaterToBin")
 }

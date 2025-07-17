@@ -18,7 +18,7 @@ import javax.swing.*
 import javax.swing.border.EmptyBorder
 import kotlin.system.exitProcess
 
-const val INSTALLER_VERSION = "1.0.31"
+const val INSTALLER_VERSION = "1.0.32"
 const val CONFIG_URL = "https://moreno.land/dl/mpack/pokecubedinstaller.json"
 const val FILE_INFO_URL = "https://moreno.land/dl/mpack/file_info.php"
 
@@ -614,7 +614,7 @@ class ModpackInstaller(private val consoleMode: Boolean = false) : JFrame("Poké
             }
         }
         
-        logToConsole("No server timestamp for ${filePath.fileName}, skipping")
+        logToConsole("No server timestamp for ${filePath.fileName}, skipping download")
         return false
     }
     
