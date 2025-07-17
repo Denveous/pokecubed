@@ -18,9 +18,8 @@ import javax.swing.*
 import javax.swing.border.EmptyBorder
 import kotlin.system.exitProcess
 
-const val INSTALLER_VERSION = "1.0.2" // testing
-const val CONFIG_URL = "https://moreno.land/dl/mpack/moddata.json"
-const val FULL_CONFIG_URL = "https://moreno.land/dl/mpack/pokecubedinstaller.json"
+const val INSTALLER_VERSION = "1.0.31"
+const val CONFIG_URL = "https://moreno.land/dl/mpack/pokecubedinstaller.json"
 const val FILE_INFO_URL = "https://moreno.land/dl/mpack/file_info.php"
 
 private val logFile = Paths.get("PokeCubedInstaller.log")
@@ -41,46 +40,7 @@ fun logMessage(message: String) {
 @Serializable
 data class ModpackConfig(
     val installer: InstallerInfo,
-    val modpack: ModpackInfo,
-    val install_profiles: Map<String, InstallProfile>,
-    val config_urls: ConfigUrls
-)
-
-@Serializable
-data class InstallerInfo(
-    val version: String,
-    val download_url: String,
-    val force_update: Boolean
-)
-
-@Serializable
-data class ModpackInfo(
-    val name: String,
-    val version: String,
-    val minecraft_version: String,
-    val loader: String,
-    val loader_version: String,
-    val publisher: String = "",
-    val website: String = "",
-    val description: String = ""
-)
-
-@Serializable
-data class InstallProfile(
-    val name: String,
-    val description: String,
-    val requires_fabric_install: Boolean,
-    val include_pokecubed_jar: Boolean
-)
-
-@Serializable
-data class ConfigUrls(
-    val full_config: String,
-    val base_download: String
-)
-
-@Serializable
-data class FullConfig(
+    val base_download: String,
     val modpack_info: ModpackInfoSimple,
     val directories: List<String>,
     val modrinth_mods: List<ModrinthMod>,
@@ -93,6 +53,17 @@ data class FullConfig(
     val native_files: List<FileInfo>,
     val core_files: List<CoreFile>
 )
+
+@Serializable
+data class InstallerInfo(
+    val version: String,
+    val download_url: String,
+    val force_update: Boolean
+)
+
+
+
+
 
 @Serializable
 data class ModpackInfoSimple(
@@ -160,7 +131,6 @@ data class ServerFile(
 class ModpackInstaller(private val consoleMode: Boolean = false) : JFrame("PokéCubed Redux Modpack Installer") {
     private val json = Json { ignoreUnknownKeys = true }
     private var config: ModpackConfig? = null
-    private var fullConfig: FullConfig? = null
     private var serverFileInfo: ServerFileInfo? = null
     private var selectedProfile = "tlauncher"
     private var minecraftDir: Path = getDefaultMinecraftDir()
@@ -423,7 +393,7 @@ class ModpackInstaller(private val consoleMode: Boolean = false) : JFrame("Poké
                 config = json.decodeFromString<ModpackConfig>(configText)
                 
                 SwingUtilities.invokeLater {
-                    val modpackVersion = config?.modpack?.version ?: "Unknown"
+                    val modpackVersion = config?.modpack_info?.version ?: "Unknown"
                     statusLabel.text = "Ready to install v$modpackVersion"
                     
                     val currentVersion = INSTALLER_VERSION
@@ -451,10 +421,6 @@ class ModpackInstaller(private val consoleMode: Boolean = false) : JFrame("Poké
     
     private fun checkForUpdates(targetDir: Path): Boolean {
         try {
-            if (fullConfig == null) {
-                val fullConfigText = java.net.URI(FULL_CONFIG_URL.replace(" ", "%20")).toURL().readText()
-                fullConfig = json.decodeFromString<FullConfig>(fullConfigText)
-            }
             
             if (serverFileInfo == null) {
                 try {
@@ -466,12 +432,12 @@ class ModpackInstaller(private val consoleMode: Boolean = false) : JFrame("Poké
                 }
             }
             
-            fullConfig?.modrinth_mods?.forEach { mod ->
+            config?.modrinth_mods?.forEach { mod ->
                 val targetPath = targetDir.resolve("mods").resolve(mod.filename)
                 if (shouldDownloadFile(targetPath)) return true
             }
             
-            fullConfig?.custom_mods?.forEach { mod ->
+            config?.custom_mods?.forEach { mod ->
                 val targetPath = if (mod.target_path.isNotEmpty()) {
                     targetDir.resolve("mods").resolve(mod.target_path).resolve(mod.filename)
                 } else {
@@ -482,12 +448,12 @@ class ModpackInstaller(private val consoleMode: Boolean = false) : JFrame("Poké
             }
             
             listOf(
-                fullConfig?.config_files to "config",
-                fullConfig?.resource_packs to "resourcepacks", 
-                fullConfig?.shader_packs to "shaderpacks",
-                fullConfig?.fabric_files to ".fabric",
-                fullConfig?.data_files to "data",
-                fullConfig?.native_files to "natives"
+                config?.config_files to "config",
+                config?.resource_packs to "resourcepacks", 
+                config?.shader_packs to "shaderpacks",
+                config?.fabric_files to ".fabric",
+                config?.data_files to "data",
+                config?.native_files to "natives"
             ).forEach { (files, dirName) ->
                 files?.forEach { file ->
                     val targetPath = if (file.target_path.isNotEmpty()) {
@@ -507,7 +473,7 @@ class ModpackInstaller(private val consoleMode: Boolean = false) : JFrame("Poké
                 }
             }
             
-            fullConfig?.core_files?.forEach { file ->
+            config?.core_files?.forEach { file ->
                 if (file.required_for.contains(selectedProfile) || file.required_for.contains("both")) {
                     val targetPath = targetDir.resolve(file.filename)
                     val serverFile = findServerFile(file.filename)
@@ -543,14 +509,14 @@ class ModpackInstaller(private val consoleMode: Boolean = false) : JFrame("Poké
         updateStatus("Cleaning up old files...")
         
         val dontDeleteFiles = loadDontDeleteList(targetDir)
-        val expectedFiles = mutableSetOf<String>()
         
-        fullConfig?.modrinth_mods?.forEach { mod ->
-            expectedFiles.add(mod.filename)
+        // Cleanup mods
+        val expectedMods = mutableSetOf<String>()
+        config?.modrinth_mods?.forEach { mod ->
+            expectedMods.add(mod.filename)
         }
-        
-        fullConfig?.custom_mods?.forEach { mod ->
-            expectedFiles.add(mod.filename)
+        config?.custom_mods?.forEach { mod ->
+            expectedMods.add(mod.filename)
         }
         
         val modsDir = targetDir.resolve("mods")
@@ -561,7 +527,7 @@ class ModpackInstaller(private val consoleMode: Boolean = false) : JFrame("Poké
                         .forEach { jarFile ->
                             val filename = jarFile.fileName.toString()
                             
-                            if (filename !in expectedFiles && filename !in dontDeleteFiles) {
+                            if (filename !in expectedMods && filename !in dontDeleteFiles) {
                                 try {
                                     if (!Files.isWritable(jarFile)) {
                                         println("Skipping read-only file: $filename")
@@ -577,7 +543,46 @@ class ModpackInstaller(private val consoleMode: Boolean = false) : JFrame("Poké
                         }
                 }
             } catch (e: Exception) {
-                println("Error during cleanup: ${e.message}")
+                println("Error during mod cleanup: ${e.message}")
+            }
+        }
+        
+        // Cleanup config files
+        val expectedConfigFiles = mutableSetOf<String>()
+        config?.config_files?.forEach { file ->
+            val fullPath = if (file.target_path.isNotEmpty()) {
+                "${file.target_path}/${file.filename}"
+            } else {
+                file.filename
+            }
+            expectedConfigFiles.add(fullPath)
+        }
+        
+        val configDir = targetDir.resolve("config")
+        if (Files.exists(configDir)) {
+            try {
+                Files.walk(configDir).use { paths ->
+                    paths.filter { Files.isRegularFile(it) }
+                        .forEach { configFile ->
+                            val relativePath = configDir.relativize(configFile).toString().replace("\\", "/")
+                            
+                            if (relativePath !in expectedConfigFiles && relativePath !in dontDeleteFiles) {
+                                try {
+                                    if (!Files.isWritable(configFile)) {
+                                        println("Skipping read-only config file: $relativePath")
+                                        return@forEach
+                                    }
+                                    
+                                    Files.delete(configFile)
+                                    println("Deleted old config file: $relativePath")
+                                } catch (e: Exception) {
+                                    println("Failed to delete config file $relativePath: ${e.message}")
+                                }
+                            }
+                        }
+                }
+            } catch (e: Exception) {
+                println("Error during config cleanup: ${e.message}")
             }
         }
     }
@@ -636,6 +641,8 @@ class ModpackInstaller(private val consoleMode: Boolean = false) : JFrame("Poké
                         statusLabel.text = "Updates available"
                         logMessage("Updates found - ready to install")
                     } else {
+                        installButton.text = "Check for Updates"
+                        installButton.background = Color(0x2196F3)
                         statusLabel.text = "No updates found"
                         logMessage("No updates found - modpack is up to date")
                     }
@@ -683,10 +690,6 @@ class ModpackInstaller(private val consoleMode: Boolean = false) : JFrame("Poké
     
     private suspend fun installModpack(): Boolean {
         return try {
-            updateStatus("Loading modpack configuration...")
-            
-            val fullConfigText = java.net.URI(FULL_CONFIG_URL.replace(" ", "%20")).toURL().readText()
-            fullConfig = json.decodeFromString<FullConfig>(fullConfigText)
             
             updateStatus("Checking file timestamps...")
             try {
@@ -713,7 +716,7 @@ class ModpackInstaller(private val consoleMode: Boolean = false) : JFrame("Poké
             var downloadedFiles = 0
             
             updateStatus("Downloading mods...")
-            fullConfig?.modrinth_mods?.forEach { mod ->
+            config?.modrinth_mods?.forEach { mod ->
                 val targetPath = targetDir.resolve("mods").resolve(mod.filename)
                 if (shouldDownloadFile(targetPath)) {
                     updateProgress(downloadedFiles, filesToDownload, "Downloading ${mod.filename}")
@@ -722,7 +725,7 @@ class ModpackInstaller(private val consoleMode: Boolean = false) : JFrame("Poké
                 }
             }
             
-            fullConfig?.custom_mods?.forEach { mod ->
+            config?.custom_mods?.forEach { mod ->
                 val targetPath = if (mod.target_path.isNotEmpty()) {
                     targetDir.resolve("mods").resolve(mod.target_path).resolve(mod.filename)
                 } else {
@@ -736,14 +739,14 @@ class ModpackInstaller(private val consoleMode: Boolean = false) : JFrame("Poké
                 }
             }
             
-            downloadedFiles = downloadFileCategoryWithTimestamp(fullConfig?.config_files, targetDir.resolve("config"), downloadedFiles, filesToDownload, "config")
-            downloadedFiles = downloadFileCategoryWithTimestamp(fullConfig?.resource_packs, targetDir.resolve("resourcepacks"), downloadedFiles, filesToDownload, "resourcepacks")
-            downloadedFiles = downloadFileCategoryWithTimestamp(fullConfig?.shader_packs, targetDir.resolve("shaderpacks"), downloadedFiles, filesToDownload, "shaderpacks")
-            downloadedFiles = downloadFileCategoryWithTimestamp(fullConfig?.fabric_files, targetDir.resolve(".fabric"), downloadedFiles, filesToDownload, ".fabric")
-            downloadedFiles = downloadFileCategoryWithTimestamp(fullConfig?.data_files, targetDir.resolve("data"), downloadedFiles, filesToDownload, "data")
-            downloadedFiles = downloadFileCategoryWithTimestamp(fullConfig?.native_files, targetDir.resolve("natives"), downloadedFiles, filesToDownload, "natives")
+            downloadedFiles = downloadFileCategoryWithTimestamp(config?.config_files, targetDir.resolve("config"), downloadedFiles, filesToDownload, "config")
+            downloadedFiles = downloadFileCategoryWithTimestamp(config?.resource_packs, targetDir.resolve("resourcepacks"), downloadedFiles, filesToDownload, "resourcepacks")
+            downloadedFiles = downloadFileCategoryWithTimestamp(config?.shader_packs, targetDir.resolve("shaderpacks"), downloadedFiles, filesToDownload, "shaderpacks")
+            downloadedFiles = downloadFileCategoryWithTimestamp(config?.fabric_files, targetDir.resolve(".fabric"), downloadedFiles, filesToDownload, ".fabric")
+            downloadedFiles = downloadFileCategoryWithTimestamp(config?.data_files, targetDir.resolve("data"), downloadedFiles, filesToDownload, "data")
+            downloadedFiles = downloadFileCategoryWithTimestamp(config?.native_files, targetDir.resolve("natives"), downloadedFiles, filesToDownload, "natives")
             
-            fullConfig?.core_files?.forEach { file ->
+            config?.core_files?.forEach { file ->
                 if (file.required_for.contains(selectedProfile) || file.required_for.contains("both")) {
                     val targetPath = targetDir.resolve(file.filename)
                     val serverFile = findServerFile(file.filename)
@@ -767,7 +770,7 @@ class ModpackInstaller(private val consoleMode: Boolean = false) : JFrame("Poké
     }
     
     private fun createDirectories(baseDir: Path) {
-        fullConfig?.directories?.forEach { dir ->
+        config?.directories?.forEach { dir ->
             Files.createDirectories(baseDir.resolve(dir))
         }
     }
@@ -775,12 +778,12 @@ class ModpackInstaller(private val consoleMode: Boolean = false) : JFrame("Poké
     private fun calculateFilesToDownload(targetDir: Path): Int {
         var count = 0
         
-        fullConfig?.modrinth_mods?.forEach { mod ->
+        config?.modrinth_mods?.forEach { mod ->
             val targetPath = targetDir.resolve("mods").resolve(mod.filename)
             if (shouldDownloadFile(targetPath)) count++
         }
         
-        fullConfig?.custom_mods?.forEach { mod ->
+        config?.custom_mods?.forEach { mod ->
             val targetPath = if (mod.target_path.isNotEmpty()) {
                 targetDir.resolve("mods").resolve(mod.target_path).resolve(mod.filename)
             } else {
@@ -791,12 +794,12 @@ class ModpackInstaller(private val consoleMode: Boolean = false) : JFrame("Poké
         }
         
         listOf(
-            fullConfig?.config_files to "config",
-            fullConfig?.resource_packs to "resourcepacks",
-            fullConfig?.shader_packs to "shaderpacks",
-            fullConfig?.fabric_files to ".fabric",
-            fullConfig?.data_files to "data",
-            fullConfig?.native_files to "natives"
+            config?.config_files to "config",
+            config?.resource_packs to "resourcepacks",
+            config?.shader_packs to "shaderpacks",
+            config?.fabric_files to ".fabric",
+            config?.data_files to "data",
+            config?.native_files to "natives"
         ).forEach { (files, dirName) ->
             files?.forEach { file ->
                 val targetPath = if (file.target_path.isNotEmpty()) {
@@ -816,7 +819,7 @@ class ModpackInstaller(private val consoleMode: Boolean = false) : JFrame("Poké
             }
         }
         
-        fullConfig?.core_files?.forEach { file ->
+        config?.core_files?.forEach { file ->
             if (file.required_for.contains(selectedProfile) || file.required_for.contains("both")) {
                 val targetPath = targetDir.resolve(file.filename)
                 val serverFile = findServerFile(file.filename)
