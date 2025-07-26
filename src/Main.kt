@@ -18,7 +18,7 @@ import javax.swing.*
 import javax.swing.border.EmptyBorder
 import kotlin.system.exitProcess
 
-const val INSTALLER_VERSION = "1.0.32"
+const val INSTALLER_VERSION = "1.0.6"
 const val CONFIG_URL = "https://moreno.land/dl/mpack/pokecubedinstaller.json"
 const val FILE_INFO_URL = "https://moreno.land/dl/mpack/file_info.php"
 
@@ -60,9 +60,6 @@ data class InstallerInfo(
     val download_url: String,
     val force_update: Boolean
 )
-
-
-
 
 
 @Serializable
@@ -488,6 +485,50 @@ class ModpackInstaller(private val consoleMode: Boolean = false) : JFrame("Poké
         }
     }
     
+    private fun getLocalModpackVersion(targetDir: Path): String? {
+        val modpackDataFile = targetDir.resolve(".modpackdata")
+        return if (Files.exists(modpackDataFile)) {
+            try {
+                val content = Files.readString(modpackDataFile)
+                val versionMatch = Regex("\"version\"\\s*:\\s*\"([^\"]+)\"").find(content)
+                versionMatch?.groupValues?.get(1)
+            } catch (e: Exception) {
+                null
+            }
+        } else {
+            null
+        }
+    }
+    
+    private fun writeModpackVersion(targetDir: Path, version: String) {
+        val modpackDataFile = targetDir.resolve(".modpackdata")
+        val content = "{\"version\": \"$version\"}"
+        try {
+            Files.writeString(modpackDataFile, content)
+        } catch (e: Exception) {
+            logMessage("Failed to write modpack version: ${e.message}")
+        }
+    }
+    
+    private fun checkForVersionMismatch(targetDir: Path): Boolean {
+        val localVersion = getLocalModpackVersion(targetDir)
+        val serverVersion = config?.modpack_info?.version
+        
+        if (localVersion == null) {
+            logMessage("No local modpack version found, assuming update needed")
+            return true
+        }
+        
+        if (serverVersion == null) {
+            logMessage("No server modpack version found, assuming no update needed")
+            return false
+        }
+        
+        val needsUpdate = localVersion != serverVersion
+        logMessage("Version check: local=$localVersion, server=$serverVersion, needs_update=$needsUpdate")
+        return needsUpdate
+    }
+    
     private fun loadDontDeleteList(targetDir: Path): Set<String> {
         val dontDeleteFile = targetDir.resolve("dontdelete.txt")
         return if (Files.exists(dontDeleteFile)) {
@@ -547,15 +588,16 @@ class ModpackInstaller(private val consoleMode: Boolean = false) : JFrame("Poké
             }
         }
         
-        // Cleanup config files
+        // Cleanup config files  
+        val protectedPaths = setOf("axiom", "iris")
         val expectedConfigFiles = mutableSetOf<String>()
         config?.config_files?.forEach { file ->
             val fullPath = if (file.target_path.isNotEmpty()) {
-                "${file.target_path}/${file.filename}"
+                "${file.target_path}/${file.filename}".replace("\\", "/")
             } else {
                 file.filename
             }
-            expectedConfigFiles.add(fullPath)
+            expectedConfigFiles.add(fullPath.lowercase())
         }
         
         val configDir = targetDir.resolve("config")
@@ -566,7 +608,16 @@ class ModpackInstaller(private val consoleMode: Boolean = false) : JFrame("Poké
                         .forEach { configFile ->
                             val relativePath = configDir.relativize(configFile).toString().replace("\\", "/")
                             
-                            if (relativePath !in expectedConfigFiles && relativePath !in dontDeleteFiles) {
+                            val normalizedPath = relativePath.replace("\\", "/").lowercase()
+                            val filenameLower = configFile.fileName.toString().lowercase()
+                            val isProtectedDir = protectedPaths.any { normalizedPath.startsWith("$it/") }
+                            val shouldDelete = !isProtectedDir &&
+                                             normalizedPath !in expectedConfigFiles && 
+                                             filenameLower !in dontDeleteFiles &&
+                                             relativePath !in dontDeleteFiles &&
+                                             normalizedPath !in dontDeleteFiles
+                            
+                            if (shouldDelete) {
                                 try {
                                     if (!Files.isWritable(configFile)) {
                                         println("Skipping read-only config file: $relativePath")
@@ -632,19 +683,19 @@ class ModpackInstaller(private val consoleMode: Boolean = false) : JFrame("Poké
                     minecraftDir
                 }
                 
-                val hasUpdates = checkForUpdates(targetDir)
+                val hasUpdates = checkForVersionMismatch(targetDir)
                 
                 SwingUtilities.invokeLater {
                     if (hasUpdates) {
                         installButton.text = "Update Modpack"
                         installButton.background = Color(0xFF9800)
                         statusLabel.text = "Updates available"
-                        logMessage("Updates found - ready to install")
+                        logMessage("Version mismatch detected - ready to install")
                     } else {
                         installButton.text = "Check for Updates"
                         installButton.background = Color(0x2196F3)
                         statusLabel.text = "No updates found"
-                        logMessage("No updates found - modpack is up to date")
+                        logMessage("Versions match - modpack is up to date")
                     }
                 }
             }
@@ -760,6 +811,11 @@ class ModpackInstaller(private val consoleMode: Boolean = false) : JFrame("Poké
             
             updateProgress(filesToDownload, filesToDownload, "Installation completed!")
             updateStatus("Installation completed!")
+            
+            val modpackVersion = config?.modpack_info?.version ?: "unknown"
+            writeModpackVersion(targetDir, modpackVersion)
+            logMessage("Updated modpack version to: $modpackVersion")
+            
             true
             
         } catch (e: Exception) {
@@ -875,7 +931,7 @@ class ModpackInstaller(private val consoleMode: Boolean = false) : JFrame("Poké
                         Thread.sleep(2000L * retryCount)
                     }
                     
-                    val encodedUrl = url.replace(" ", "%20").replace("\\", "/")
+                    val encodedUrl = url.replace(" ", "%20").replace("\\", "/").replace("[", "%5B").replace("]", "%5D").replace("'", "%27")
                     val connection = java.net.URI(encodedUrl).toURL().openConnection()
                     connection.connectTimeout = 30000
                     connection.readTimeout = 60000
